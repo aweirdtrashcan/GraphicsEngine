@@ -1,0 +1,10 @@
+﻿  Engine.cpp
+  Logger.cpp
+  ImGuiManager.cpp
+  main.cpp
+  Mesh.cpp
+  Renderer.cpp
+  Window.cpp
+C:\Users\Diego\source\repos\GraphicsEngine\src\Renderer.cpp(504,53): warning C4244: '+=': conversion from 'VkDeviceSize' to 'size_t', possible loss of data
+C:\Users\Diego\source\repos\GraphicsEngine\src\Renderer.cpp(1260,14): warning C4244: 'initializing': conversion from 'std::streamoff' to 'size_t', possible loss of data
+C:\Users\Diego\source\repos\GraphicsEngine\Bin\Intermediate\Engine.obj : fatal error LNK1112: module machine type 'x86' conflicts with target machine type 'ARM'
