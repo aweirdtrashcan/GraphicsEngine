@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 #include "Mesh.h"
 
 class Node;
@@ -12,11 +14,12 @@ public:
     void Draw(VkCommandBuffer commandBuffer, uint32_t frameNum) const;
 private:
     Node* ParseNode(const struct aiNode* node);
-    void ParseMesh(const struct aiScene* scene, void* memory);
+    void ParseMesh(const struct aiScene* scene, void* memory, const char* path);
 private:
     Mesh* m_Meshes;
     uint32_t m_NumMeshes;
     Node* m_RootNode = nullptr;
+    std::vector<std::string> m_TexturePath;
     glm::mat4 m_Transform = glm::mat4(1.0f);
 };
 

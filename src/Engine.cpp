@@ -10,8 +10,8 @@ Engine::Engine(uint16_t width, uint16_t height)
 	m_Window(width, height, "Stimply Engine", m_ImGuiManager),
 	m_Renderer(width, height, &m_Window, m_ImGuiManager)
 {
-	m_Mesh = new Scene("./Models/sponza.obj");
-
+	m_Mesh = new Scene("./Models/Sponza/sponza.obj");
+	
 	Logger::Debug("Scene created!\n");
 	m_Renderer.AddScene(m_Mesh);
 	EventManager::RegisterListener(EVENT_KEY_PRESSED, this);

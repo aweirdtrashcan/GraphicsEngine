@@ -20,16 +20,16 @@ class Window;
 enum DescriptorPoolType {
 	DESCRIPTOR_POOL_TYPE_UNIFORM_BUFFER,
 	DESCRIPTOR_POOL_TYPE_IMGUI,
-	DESCRIPTOR_POOL_TYPE_SAMPLER,
+	DESCRIPTOR_POOL_TYPE_COMBINED_IMAGE_SAMPLER,
 
 	DESCRIPTOR_POOL_TYPE_MAX
 };
 
 enum DescriptorSetType
 {
-	DESCRIPTOR_SET_TYPE_VERTEX_MVP,
-	DESCRIPTOR_SET_TYPE_FRAGMENT_LIGHT,
-	DESCRIPTOR_SET_TYPE_FRAGMENT_LIGHT_TEXTURE,
+	DESCRIPTOR_SET_TYPE_VERTEX_UNIFORM,
+	DESCRIPTOR_SET_TYPE_FRAGMENT_UNIFORM,
+	DESCRIPTOR_SET_TYPE_FRAGMENT_UNIFORM_BUFFER_COMBINED_IMAGE_SAMPLER,
 
 	DESCRIPTOR_SET_TYPE_MAX
 };
@@ -74,16 +74,21 @@ public:
 	uint32_t					FindMemoryIndex(uint32_t typeFilter, VkMemoryHeapFlags flags) const;
 	void						DestroyImage(GPUImage& image) const;
 	void						GetViewportAndScissor(VkViewport& viewport, VkRect2D& scissor) const;
-	VkPipelineLayout			GetGraphicsPipelineLayout(PipelineType type) const { return m_GraphicsPipelines[type]; }
+	VkPipelineLayout			GetGraphicsPipelineLayout(PipelineType type) const { return m_PipelineLayouts[type]; }
 	VkDescriptorSetLayout		GetDescriptorSetLayout(DescriptorSetType type) const { return m_DescriptorSetLayouts[type]; }
-	VkDescriptorSet				CreateDescriptorSet(VkDescriptorType descriptorType, VkDescriptorPool descriptorPool, VkDescriptorSetLayout setLayout) const;
+	VkDescriptorSet				CreateDescriptorSet(VkDescriptorPool descriptorPool, VkDescriptorSetLayout setLayout, uint32_t setCount) const;
 	VkCommandBuffer				GetTransientTransferCommandBuffer() const;
 	void						EndTransientTransferCommandBuffer(VkCommandBuffer commandBuffer, VkFence fenceToSignal) const;
-	VkDescriptorPool			GetDescriptorPool(DescriptorPoolType type) const { return m_DescriptorPool[type]; }
+	VkDescriptorPool			GetDescriptorPool() const { return m_DescriptorPool; }
 	void						AddScene(const class Scene* scene);
+	VkFence						CreateFence() const;
+	void						DestroyFence(VkFence fence) const;
 	static const Renderer*		Get();
 	const std::vector<Light>	GetWorldLights() const { return m_WorldLights; }
 	uint32_t					GetFrameCount() const { return m_Framecount; }
+	void						ImageBarrier(VkCommandBuffer commandBuffer, GPUImage& image, VkAccessFlags srcMask, VkAccessFlags dstMask, VkImageLayout oldLayout, VkImageLayout newLayout) const;
+	VkSampler					GetSampler() const { return m_Sampler; }
+	void						CopyBufferToImage(VkCommandBuffer commandBuffer, const GPUBuffer& buffer, const GPUImage& image) const;
 	
 private:
 	static VkDebugUtilsMessengerCreateInfoEXT GetDebugMessengerCreateInfo();
@@ -110,9 +115,9 @@ private:
 	VkFormat					FindOptimalDepthFormat(VkSurfaceKHR surface) const;
 	GPUImage					CreateDepthBuffer(uint16_t width, uint16_t height, VkSampleCountFlagBits sampleCount) const;
 	void						DestroyDepthBuffer(GPUImage& depthBuffer) const;
-	VkDescriptorPool			CreateDescriptorPool(VkDescriptorType descriptorType, uint32_t numPreAllocatedDescriptors = 10, uint32_t maxDescriptors = 100, bool
+	VkDescriptorPool			CreateDescriptorPool(VkDescriptorType* descriptorType, uint32_t typesCount, uint32_t numPreAllocatedDescriptors = 10, uint32_t maxDescriptors = 100, bool
 				                                     allowFreeDescriptor = false) const;
-	VkDescriptorSetLayout		CreateDescriptorSetLayout(VkDescriptorType descriptorType, uint32_t descriptorCount, VkShaderStageFlagBits shaderStage) const;
+	VkDescriptorSetLayout		CreateDescriptorSetLayout(VkDescriptorType* descriptorTypes, uint32_t typesCount, uint32_t descriptorCount, VkShaderStageFlagBits shaderStage) const;
 	VkCommandPool				CreateCommandPool(bool canReset, bool isTransient, uint32_t queueIndex) const;
 	VkPipelineLayout			CreatePipelineLayout(uint32_t setCount, VkDescriptorSetLayout* setLayout) const;
 	VkPipeline					CreateGraphicsPipeline(Shader* shaders, uint32_t shaderCount, VkPipelineLayout pipelineLayout, VkRenderPass renderPass) const;
@@ -123,6 +128,8 @@ private:
 	void						UpdateVPBuffer(float deltaTime);
 	void						UpdateMVPDescriptorSets(const GPUBuffer& buffer, VkDescriptorSet* descriptorSet, uint32_t setCount) const;
 	void						UpdateFragmentDescriptorSets(const GPUBuffer& buffer, VkDescriptorSet* descriptorSet, uint32_t setCount) const;
+	VkSampler					CreateSampler() const;
+
 private:
 	static VkBool32 VKAPI_PTR debugUtilsMessenger(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
 								 VkDebugUtilsMessageTypeFlagsEXT messageTypes,
@@ -159,7 +166,7 @@ private:
 	std::vector<VkFramebuffer>		m_Framebuffer;
 	VkRenderPass					m_RenderPass;
 	GPUImage						m_DepthBuffer;
-	VkDescriptorPool				m_DescriptorPool[DESCRIPTOR_POOL_TYPE_MAX];
+	VkDescriptorPool				m_DescriptorPool;
 	VkDescriptorSetLayout			m_DescriptorSetLayouts[DESCRIPTOR_SET_TYPE_MAX];
 	VkCommandPool					m_GraphicsCommandPool;
 	VkCommandPool					m_TransferCommandPool;
@@ -167,8 +174,9 @@ private:
 	GPUBuffer						m_VertexBuffer;
 	GPUBuffer						m_IndexBuffer;
 	VkPipelineLayout				m_PipelineLayouts[GRAPHICS_PIPELINE_TYPE_MAX];
-	VkPipeline						m_GraphicsPipelines[GRAPHICS_PIPELINE_TYPE_MAX];
+	VkPipeline						m_GraphicsPipelines[GRAPHICS_PIPELINE_TYPE_MAX]{};
 	std::vector<Light>				m_WorldLights;
+	VkSampler						m_Sampler;
 private:
 	static inline const Renderer*	s_RendererInstance;
 	Window*							m_Window;

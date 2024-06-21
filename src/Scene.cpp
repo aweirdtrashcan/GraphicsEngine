@@ -1,5 +1,7 @@
 #include "Scene.h"
 
+#include <filesystem>
+
 #include "Engine.h"
 #include "Logger.h"
 
@@ -8,6 +10,7 @@
 #include <assimp/scene.h>
 
 #include "exception/RendererException.h"
+#include "stb/stb_image.h"
 
 Scene::Scene(const char* path)
 {
@@ -23,8 +26,13 @@ Scene::Scene(const char* path)
 
     m_Meshes = (Mesh*)malloc(sizeof(Mesh) * scene->mNumMeshes);
     m_NumMeshes = scene->mNumMeshes;
+
+    for (uint32_t i = 0; i < scene->mNumMaterials; i++)
+    {
+        
+    }
     
-    ParseMesh(scene, m_Meshes);
+    ParseMesh(scene, m_Meshes, path);
     m_RootNode = ParseNode(scene->mRootNode);
 }
 
@@ -65,7 +73,7 @@ Node* Scene::ParseNode(const aiNode* node)
     return newNode;
 }
 
-void Scene::ParseMesh(const aiScene* scene, void* memory)
+void Scene::ParseMesh(const aiScene* scene, void* memory, const char* path)
 {
     for (uint32_t i = 0; i < scene->mNumMeshes; i++)
     {
@@ -83,6 +91,8 @@ void Scene::ParseMesh(const aiScene* scene, void* memory)
             {
                 vertices[j].normal = *reinterpret_cast<glm::vec3*>(&mesh->mNormals[j]);
             }
+
+            memcpy(&vertices[j].texCoord, &mesh->mTextureCoords[0][j], 2 * sizeof(float));
         }
 
         uint32_t currentIndex = 0;
@@ -94,7 +104,36 @@ void Scene::ParseMesh(const aiScene* scene, void* memory)
             indices[currentIndex++] = mesh->mFaces[k].mIndices[2];
         }
 
-        new (&static_cast<Mesh*>(memory)[i]) Mesh(vertices, vertCount, indices, faceCount);
+        Logger::Debug("Creating mesh number: %d\n", i);
+
+        aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
+        aiString texPath;
+        std::filesystem::path basePath = std::filesystem::path(path).parent_path();
+        
+        if (material->GetTexture(aiTextureType_DIFFUSE, 0, &texPath) == aiReturn_SUCCESS)
+        {
+            std::string fullPath;
+            fullPath.append(basePath.string() + "/");
+            fullPath.append(texPath.C_Str());
+
+            new (&static_cast<Mesh*>(memory)[i]) Mesh(
+                vertices,
+                vertCount,
+                indices,
+                faceCount,
+                fullPath.c_str()
+            );
+        }
+        else
+        {
+            new (&static_cast<Mesh*>(memory)[i]) Mesh(
+                vertices,
+                vertCount,
+                indices,
+                faceCount,
+                nullptr
+            );
+        }
 
         delete[] vertices;
         delete[] indices;

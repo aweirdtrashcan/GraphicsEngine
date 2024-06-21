@@ -35,6 +35,7 @@ struct GPUImage {
 	VkImageView view = VK_NULL_HANDLE;
 	VkDeviceMemory memory = VK_NULL_HANDLE;
 	VkSurfaceFormatKHR format = {};
+	VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
 	uint32_t mipLevels = 1;
 	VkImageAspectFlags aspect = {};
 	uint16_t width = 0;
@@ -80,6 +81,7 @@ struct alignas(64) FragmentBuffer {
 struct Vertex {
 	glm::vec3 pos;
 	glm::vec3 normal;
+	glm::vec2 texCoord;
 };
 
 struct Transform

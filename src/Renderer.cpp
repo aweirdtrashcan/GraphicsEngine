@@ -67,11 +67,18 @@ Renderer::Renderer(uint16_t width, uint16_t height, Window* window, ImGuiManager
 	m_DepthBuffer = CreateDepthBuffer(m_Width, m_Height, VK_SAMPLE_COUNT_1_BIT);
 	m_RenderPass = CreateRenderPass(m_BackBuffers[0].format.format, m_DepthBuffer.format.format);
 	m_Framebuffer = CreateFramebuffers(m_BackBuffers, m_DepthBuffer, m_RenderPass);
-	m_DescriptorPool[DESCRIPTOR_POOL_TYPE_UNIFORM_BUFFER] = CreateDescriptorPool(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000, 10000);
-	m_DescriptorPool[DESCRIPTOR_POOL_TYPE_IMGUI] = CreateDescriptorPool(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 10, 100, true);
-	m_DescriptorPool[DESCRIPTOR_POOL_TYPE_SAMPLER] = CreateDescriptorPool(VK_DESCRIPTOR_TYPE_SAMPLER, 10, 100, true);
-	m_DescriptorSetLayouts[DESCRIPTOR_SET_TYPE_VERTEX_MVP] = CreateDescriptorSetLayout(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT);
-	m_DescriptorSetLayouts[DESCRIPTOR_SET_TYPE_FRAGMENT_LIGHT_TEXTURE] = CreateDescriptorSetLayout(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+	VkDescriptorType types[] =
+	{
+		VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+		VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+	};
+	m_DescriptorPool= CreateDescriptorPool(types, _countof(types), 1000, 10000, true);
+	VkDescriptorType uboTypes[] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER };
+	VkDescriptorType cisTypes[] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER };
+	m_DescriptorSetLayouts[DESCRIPTOR_SET_TYPE_VERTEX_UNIFORM] = CreateDescriptorSetLayout(uboTypes, _countof(uboTypes), 1, VK_SHADER_STAGE_VERTEX_BIT);
+	m_DescriptorSetLayouts[DESCRIPTOR_SET_TYPE_FRAGMENT_UNIFORM] = CreateDescriptorSetLayout(uboTypes, _countof(uboTypes), 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+	m_DescriptorSetLayouts[DESCRIPTOR_SET_TYPE_FRAGMENT_UNIFORM_BUFFER_COMBINED_IMAGE_SAMPLER] =
+		CreateDescriptorSetLayout(cisTypes, _countof(cisTypes), 1, VK_SHADER_STAGE_FRAGMENT_BIT);
 	m_GraphicsCommandPool = CreateCommandPool(true, false, m_GraphicsQueueIndex);
 	m_TransferCommandPool = CreateCommandPool(true, true, m_TransferQueueIndex);
 	CreateGraphicsCommandBuffers(m_CommandBuffers);
@@ -80,12 +87,12 @@ Renderer::Renderer(uint16_t width, uint16_t height, Window* window, ImGuiManager
 	shaders[0] = CreateShader("./Shaders/vertexshader.spv", VK_SHADER_STAGE_VERTEX_BIT);
 	shaders[1] = CreateShader("./Shaders/fragmentshader.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
-	VkDescriptorSetLayout layoutMvpLightTexture[] = { m_DescriptorSetLayouts[DESCRIPTOR_SET_TYPE_VERTEX_MVP], m_DescriptorSetLayouts[DESCRIPTOR_SET_TYPE_FRAGMENT_LIGHT_TEXTURE] };
-	VkDescriptorSetLayout layoutMvpLight[] = { m_DescriptorSetLayouts[DESCRIPTOR_SET_TYPE_VERTEX_MVP], m_DescriptorSetLayouts[DESCRIPTOR_SET_TYPE_FRAGMENT_LIGHT] };
+	VkDescriptorSetLayout layoutMvpLightTexture[] = { m_DescriptorSetLayouts[DESCRIPTOR_SET_TYPE_VERTEX_UNIFORM], m_DescriptorSetLayouts[DESCRIPTOR_SET_TYPE_FRAGMENT_UNIFORM_BUFFER_COMBINED_IMAGE_SAMPLER] };
+	VkDescriptorSetLayout layoutMvpLight[] = { m_DescriptorSetLayouts[DESCRIPTOR_SET_TYPE_VERTEX_UNIFORM], m_DescriptorSetLayouts[DESCRIPTOR_SET_TYPE_FRAGMENT_UNIFORM] };
 	m_PipelineLayouts[GRAPHICS_PIPELINE_TYPE_MVP_LIGHT_TEXTURE] = CreatePipelineLayout(_countof(layoutMvpLightTexture), layoutMvpLightTexture);
 	m_PipelineLayouts[GRAPHICS_PIPELINE_TYPE_MVP_LIGHT] = CreatePipelineLayout(_countof(layoutMvpLight), layoutMvpLight);
 	m_GraphicsPipelines[GRAPHICS_PIPELINE_TYPE_MVP_LIGHT_TEXTURE] = CreateGraphicsPipeline(shaders, _countof(shaders), m_PipelineLayouts[GRAPHICS_PIPELINE_TYPE_MVP_LIGHT_TEXTURE], m_RenderPass);
-	m_GraphicsPipelines[GRAPHICS_PIPELINE_TYPE_MVP_LIGHT] = CreateGraphicsPipeline(shaders, _countof(shaders), m_PipelineLayouts[GRAPHICS_PIPELINE_TYPE_MVP_LIGHT], m_RenderPass);
+	//m_GraphicsPipelines[GRAPHICS_PIPELINE_TYPE_MVP_LIGHT] = CreateGraphicsPipeline(shaders, _countof(shaders), m_PipelineLayouts[GRAPHICS_PIPELINE_TYPE_MVP_LIGHT], m_RenderPass);
 
 	vkDestroyShaderModule(m_LogicalDevice, shaders[0].shader, m_Allocator);
 	vkDestroyShaderModule(m_LogicalDevice, shaders[1].shader, m_Allocator);
@@ -107,10 +114,13 @@ Renderer::Renderer(uint16_t width, uint16_t height, Window* window, ImGuiManager
 	centralLight.linearFalloff = 0.08f;
 	centralLight.quadraticFalloff = 0.01f;
 	m_WorldLights.push_back(centralLight);
+
+	m_Sampler = CreateSampler();
 }
 
 Renderer::~Renderer() {
 	vkDeviceWaitIdle(m_LogicalDevice);
+	vkDestroySampler(m_LogicalDevice, m_Sampler, m_Allocator);
 	for (VkPipeline pipeline : m_GraphicsPipelines)
 		vkDestroyPipeline(m_LogicalDevice, pipeline, m_Allocator);
 	for (VkPipelineLayout pipelineLayout : m_PipelineLayouts)
@@ -122,8 +132,7 @@ Renderer::~Renderer() {
 	vkDestroyCommandPool(m_LogicalDevice, m_GraphicsCommandPool, m_Allocator);
 	for (VkDescriptorSetLayout setLayouts : m_DescriptorSetLayouts)
 		vkDestroyDescriptorSetLayout(m_LogicalDevice, setLayouts, m_Allocator);
-	for (uint32_t i = 0; i < DESCRIPTOR_POOL_TYPE_MAX; i++)
-		vkDestroyDescriptorPool(m_LogicalDevice, m_DescriptorPool[i], m_Allocator);
+	vkDestroyDescriptorPool(m_LogicalDevice, m_DescriptorPool, m_Allocator);
 	DestroyDepthBuffer(m_DepthBuffer);
 	DestroyFramebuffers(m_Framebuffer);
 	vkDestroyRenderPass(m_LogicalDevice, m_RenderPass, m_Allocator);
@@ -285,6 +294,25 @@ void Renderer::AddScene(const class Scene* scene) {
 	m_Meshes.push_back(scene);
 }
 
+VkFence Renderer::CreateFence() const
+{
+	VkFence fence;
+	
+	VkFenceCreateInfo createInfo;
+	createInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+	createInfo.pNext = nullptr;
+	createInfo.flags = 0;
+
+	VkRes(vkCreateFence(m_LogicalDevice, &createInfo, m_Allocator, &fence), "Failed to create fence");
+
+	return fence;
+}
+
+void Renderer::DestroyFence(VkFence fence) const
+{
+	vkDestroyFence(m_LogicalDevice, fence, m_Allocator);
+}
+
 const Renderer* Renderer::Get() {
 	return s_RendererInstance;
 }
@@ -314,7 +342,7 @@ ImGui_ImplVulkan_InitInfo Renderer::GetVulkanImGuiInitInfo() const
 	initInfo.Device = m_LogicalDevice;
 	initInfo.QueueFamily = m_GraphicsQueueIndex;
 	initInfo.Queue = m_GraphicsQueue;
-	initInfo.DescriptorPool = m_DescriptorPool[DESCRIPTOR_POOL_TYPE_IMGUI];
+	initInfo.DescriptorPool = m_DescriptorPool;
 	initInfo.RenderPass = m_RenderPass;
 	initInfo.MinImageCount = m_Framecount;
 	initInfo.ImageCount = m_Framecount;
@@ -328,6 +356,24 @@ ImGui_ImplVulkan_InitInfo Renderer::GetVulkanImGuiInitInfo() const
 	initInfo.MinAllocationSize = 1024 * 1024;
 
 	return initInfo;
+}
+
+void Renderer::CopyBufferToImage(VkCommandBuffer commandBuffer, const GPUBuffer& buffer, const GPUImage& image) const
+{
+	VkBufferImageCopy copyRegion;
+	copyRegion.bufferOffset = 0;
+	copyRegion.bufferRowLength = 0;
+	copyRegion.bufferImageHeight = 0;
+	copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	copyRegion.imageSubresource.layerCount = 1;
+	copyRegion.imageSubresource.mipLevel = 0;
+	copyRegion.imageSubresource.baseArrayLayer = 0;
+	copyRegion.imageOffset = {};
+	copyRegion.imageExtent.depth = 1.0f;
+	copyRegion.imageExtent.width = static_cast<uint32_t>(image.width);
+	copyRegion.imageExtent.height = static_cast<uint32_t>(image.height);
+	
+	vkCmdCopyBufferToImage(commandBuffer, buffer.buffer, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
 }
 
 VkDebugUtilsMessengerCreateInfoEXT Renderer::GetDebugMessengerCreateInfo() {
@@ -1021,7 +1067,8 @@ GPUImage Renderer::CreateImage(VkFormat format, VkImageAspectFlags aspect, VkIma
 	image.width = width;
 	image.height = height;
 	image.mipLevels = mipLevels;
-
+	image.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+	
 	VkImageCreateInfo createInfo;
 	createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 	createInfo.pNext = nullptr;
@@ -1124,41 +1171,47 @@ void Renderer::DestroyDepthBuffer(GPUImage& depthBuffer) const {
 	DestroyImage(depthBuffer);
 }
 
-VkDescriptorPool Renderer::CreateDescriptorPool(VkDescriptorType descriptorType, uint32_t numPreAllocatedDescriptors, uint32_t maxDescriptors, bool allowFreeDescriptor) const {
+VkDescriptorPool Renderer::CreateDescriptorPool(VkDescriptorType* descriptorType, uint32_t typesCount, uint32_t numPreAllocatedDescriptors, uint32_t maxDescriptors, bool allowFreeDescriptor) const {
 	VkDescriptorPool descriptorPool;
 
-	VkDescriptorPoolSize size;
-	size.type = descriptorType;
-	size.descriptorCount = numPreAllocatedDescriptors;
+	VkDescriptorPoolSize* sizes = (VkDescriptorPoolSize*)alloca(typesCount * sizeof(VkDescriptorPoolSize));
+	for (uint32_t i = 0; i < typesCount; i++)
+	{
+		sizes[i].type = descriptorType[i];
+		sizes[i].descriptorCount = numPreAllocatedDescriptors;	
+	}
 
 	VkDescriptorPoolCreateInfo createInfo;
 	createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
 	createInfo.pNext = nullptr;
 	createInfo.flags = allowFreeDescriptor ? VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT : 0;
 	createInfo.maxSets = maxDescriptors;
-	createInfo.poolSizeCount = 1;
-	createInfo.pPoolSizes = &size;
+	createInfo.poolSizeCount = typesCount;
+	createInfo.pPoolSizes = sizes;
 
 	VkRes(vkCreateDescriptorPool(m_LogicalDevice, &createInfo, m_Allocator, &descriptorPool), "Failed to create descriptor pool!");
 
 	return descriptorPool;
 }
 
-VkDescriptorSetLayout Renderer::CreateDescriptorSetLayout(VkDescriptorType descriptorType, uint32_t descriptorCount, VkShaderStageFlagBits shaderStage) const {
+VkDescriptorSetLayout Renderer::CreateDescriptorSetLayout(VkDescriptorType* descriptorTypes, uint32_t typesCount, uint32_t descriptorCount, VkShaderStageFlagBits shaderStage) const {
 	VkDescriptorSetLayout setLayout;
 
-	VkDescriptorSetLayoutBinding setBinding[1];
-	setBinding[0].binding = 0;
-	setBinding[0].descriptorType = descriptorType;
-	setBinding[0].descriptorCount = descriptorCount;
-	setBinding[0].stageFlags = shaderStage;
-	setBinding[0].pImmutableSamplers = nullptr;
+	VkDescriptorSetLayoutBinding* setBinding = (VkDescriptorSetLayoutBinding*)alloca(typesCount * sizeof(VkDescriptorSetLayoutBinding));
+	for (uint32_t i = 0; i < typesCount; i++)
+	{
+		setBinding[i].binding = i;
+		setBinding[i].descriptorType = descriptorTypes[i];
+		setBinding[i].descriptorCount = descriptorCount;
+		setBinding[i].stageFlags = shaderStage;
+		setBinding[i].pImmutableSamplers = nullptr;
+	}	
 
 	VkDescriptorSetLayoutCreateInfo setLayoutCreateInfo;
 	setLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
 	setLayoutCreateInfo.pNext = nullptr;
 	setLayoutCreateInfo.flags = 0;
-	setLayoutCreateInfo.bindingCount = _countof(setBinding);
+	setLayoutCreateInfo.bindingCount = typesCount;
 	setLayoutCreateInfo.pBindings = setBinding;
 
 	VkRes(vkCreateDescriptorSetLayout(m_LogicalDevice, &setLayoutCreateInfo, m_Allocator, &setLayout), "Failed to create descriptor set layout");
@@ -1166,14 +1219,14 @@ VkDescriptorSetLayout Renderer::CreateDescriptorSetLayout(VkDescriptorType descr
 	return setLayout;
 }
 
-VkDescriptorSet Renderer::CreateDescriptorSet(VkDescriptorType descriptorType, VkDescriptorPool descriptorPool, VkDescriptorSetLayout setLayout) const {
+VkDescriptorSet Renderer::CreateDescriptorSet(VkDescriptorPool descriptorPool, VkDescriptorSetLayout setLayout, uint32_t setCount) const {
 	VkDescriptorSet set;
 
 	VkDescriptorSetAllocateInfo allocateInfo;
 	allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
 	allocateInfo.pNext = nullptr;
 	allocateInfo.descriptorPool = descriptorPool;
-	allocateInfo.descriptorSetCount = 1;
+	allocateInfo.descriptorSetCount = setCount;
 	allocateInfo.pSetLayouts = &setLayout;
 
 	VkRes(vkAllocateDescriptorSets(m_LogicalDevice, &allocateInfo, &set), "Failed to allocate descriptor set!");
@@ -1334,7 +1387,7 @@ VkPipeline Renderer::CreateGraphicsPipeline(Shader* shaders, uint32_t shaderCoun
 	vertexBindings[0].stride = sizeof(Vertex);
 	vertexBindings[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-	VkVertexInputAttributeDescription vertexAttributes[2];
+	VkVertexInputAttributeDescription vertexAttributes[3];
 	vertexAttributes[0].location = 0;
 	vertexAttributes[0].binding = 0;
 	vertexAttributes[0].format = VK_FORMAT_R32G32B32_SFLOAT;
@@ -1344,6 +1397,11 @@ VkPipeline Renderer::CreateGraphicsPipeline(Shader* shaders, uint32_t shaderCoun
 	vertexAttributes[1].binding = 0;
 	vertexAttributes[1].format = VK_FORMAT_R32G32B32_SFLOAT;
 	vertexAttributes[1].offset = sizeof(glm::vec3);
+
+	vertexAttributes[2].location = 2;
+	vertexAttributes[2].binding = 0;
+	vertexAttributes[2].format = VK_FORMAT_R32G32_SFLOAT;
+	vertexAttributes[2].offset = sizeof(glm::vec3) * 2;
 
 	VkPipelineVertexInputStateCreateInfo vertexInputCreateInfo;
 	vertexInputCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -1742,6 +1800,66 @@ void Renderer::UpdateFragmentDescriptorSets(const GPUBuffer& buffer, VkDescripto
 
 		vkUpdateDescriptorSets(m_LogicalDevice, 1, &writeSet, 0, nullptr);
 	}
+}
+
+void Renderer::ImageBarrier(VkCommandBuffer commandBuffer, GPUImage& image, VkAccessFlags srcMask, VkAccessFlags dstMask, VkImageLayout oldLayout, VkImageLayout newLayout) const
+{
+	VkImageSubresourceRange subresource;
+	subresource.aspectMask = image.aspect;
+	subresource.layerCount = 1;
+	subresource.levelCount = 1;
+	subresource.baseArrayLayer = 0;
+	subresource.baseMipLevel = 0;
+
+	VkImageMemoryBarrier barrier;
+	barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	barrier.pNext = nullptr;
+	barrier.srcAccessMask = srcMask;
+	barrier.dstAccessMask = dstMask;
+	barrier.oldLayout = oldLayout;
+	barrier.newLayout = newLayout;
+	barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barrier.image = image.image;
+	barrier.subresourceRange = subresource;
+
+	vkCmdPipelineBarrier(
+		commandBuffer,
+		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+		0, 0, nullptr, 0, nullptr,
+		1, &barrier
+	);
+
+	image.layout = newLayout;
+}
+
+VkSampler Renderer::CreateSampler() const
+{
+	VkSampler sampler;
+	
+	VkSamplerCreateInfo createInfo;
+	createInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+	createInfo.pNext = nullptr;
+	createInfo.flags = 0;
+	createInfo.magFilter = VK_FILTER_LINEAR;
+	createInfo.minFilter = VK_FILTER_LINEAR;
+	createInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+	createInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	createInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	createInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	createInfo.mipLodBias = 0.0f;
+	createInfo.anisotropyEnable = VK_FALSE;
+	createInfo.maxAnisotropy = 1.0f;
+	createInfo.compareEnable = VK_FALSE;
+	createInfo.compareOp = VK_COMPARE_OP_NEVER;
+	createInfo.minLod = 0.0f;
+	createInfo.maxLod = 1.0f;
+	createInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_WHITE;
+	createInfo.unnormalizedCoordinates = VK_FALSE;
+
+	VkRes(vkCreateSampler(m_LogicalDevice, &createInfo, m_Allocator, &sampler), "Failed to create sampler!");
+
+	return sampler;
 }
 
 VkBool32 Renderer::debugUtilsMessenger(
