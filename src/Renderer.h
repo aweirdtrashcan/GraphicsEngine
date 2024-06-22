@@ -77,9 +77,9 @@ public:
 	VkPipelineLayout			GetGraphicsPipelineLayout(PipelineType type) const { return m_PipelineLayouts[type]; }
 	VkDescriptorSetLayout		GetDescriptorSetLayout(DescriptorSetType type) const { return m_DescriptorSetLayouts[type]; }
 	VkDescriptorSet				CreateDescriptorSet(VkDescriptorPool descriptorPool, VkDescriptorSetLayout setLayout, uint32_t setCount) const;
-	VkCommandBuffer				GetTransientTransferCommandBuffer() const;
-	void						EndTransientTransferCommandBuffer(VkCommandBuffer commandBuffer, VkFence fenceToSignal) const;
-	VkDescriptorPool			GetDescriptorPool() const { return m_DescriptorPool; }
+	VkCommandBuffer				GetTransientTransferCommandBuffer(uint8_t threadId) const;
+	void						EndTransientTransferCommandBuffer(VkCommandBuffer commandBuffer, VkFence fenceToSignal, uint8_t threadId) const;
+	VkDescriptorPool			GetDescriptorPool(uint8_t threadId) const { return m_DescriptorPool[threadId]; }
 	void						AddScene(const class Scene* scene);
 	VkFence						CreateFence() const;
 	void						DestroyFence(VkFence fence) const;
@@ -100,8 +100,8 @@ private:
 	VkDebugUtilsMessengerEXT	CreateDebugMessenger(VkInstance instance) const;
 	void						DestroyDebugUtils(VkInstance instance, VkDebugUtilsMessengerEXT messenger) const;
 	VkDevice					CreateLogicalDevice(VkPhysicalDevice physicalDevice, const std::vector<OptionalVulkanRequest>& deviceExtensions,
-													const VkPhysicalDeviceFeatures& requestedFeatures, VkQueue& graphicsQueue, VkQueue& transferQueue,
-													uint32_t& graphicsQueueIndex, uint32_t& transferQueueIndex) const;
+						                            const VkPhysicalDeviceFeatures& requestedFeatures, VkQueue& graphicsQueue, VkQueue* transferQueue,
+						                            uint32_t& graphicsQueueIndex, uint32_t& transferQueueIndex) const;
 	QueueFamilyIndex			FindQueueFamilyIndices(VkPhysicalDevice physicalDevice) const;
 	VkSwapchainKHR				CreateSwapchain(VkPhysicalDevice physicalDevice, VkDevice device, VkSurfaceKHR surface, std::vector<GPUImage>& images);
 	VkSurfaceFormatKHR			FindOptimalSwapchainFormat(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface) const;
@@ -129,6 +129,7 @@ private:
 	void						UpdateMVPDescriptorSets(const GPUBuffer& buffer, VkDescriptorSet* descriptorSet, uint32_t setCount) const;
 	void						UpdateFragmentDescriptorSets(const GPUBuffer& buffer, VkDescriptorSet* descriptorSet, uint32_t setCount) const;
 	VkSampler					CreateSampler() const;
+	void						SetAttenuationByDistance(size_t lightIndex);
 
 private:
 	static VkBool32 VKAPI_PTR debugUtilsMessenger(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -156,7 +157,7 @@ private:
 	uint32_t						m_GraphicsQueueIndex;
 	uint32_t						m_TransferQueueIndex;
 	VkQueue							m_GraphicsQueue;
-	VkQueue							m_TransferQueue;
+	VkQueue							m_TransferQueue[2];
 	VkSwapchainKHR					m_Swapchain;
 	std::vector<GPUImage>			m_BackBuffers;
 	std::vector<VkSemaphore>		m_GraphicsImageAcquiredSemaphores;
@@ -166,10 +167,10 @@ private:
 	std::vector<VkFramebuffer>		m_Framebuffer;
 	VkRenderPass					m_RenderPass;
 	GPUImage						m_DepthBuffer;
-	VkDescriptorPool				m_DescriptorPool;
+	VkDescriptorPool				m_DescriptorPool[2];
 	VkDescriptorSetLayout			m_DescriptorSetLayouts[DESCRIPTOR_SET_TYPE_MAX];
 	VkCommandPool					m_GraphicsCommandPool;
-	VkCommandPool					m_TransferCommandPool;
+	VkCommandPool					m_TransferCommandPool[2];
 	std::vector<VkCommandBuffer>	m_CommandBuffers;
 	GPUBuffer						m_VertexBuffer;
 	GPUBuffer						m_IndexBuffer;

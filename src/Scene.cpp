@@ -1,6 +1,7 @@
 #include "Scene.h"
 
 #include <filesystem>
+#include <thread>
 
 #include "Engine.h"
 #include "Logger.h"
@@ -11,6 +12,8 @@
 
 #include "exception/RendererException.h"
 #include "stb/stb_image.h"
+
+void TestThread(const aiScene* scene, Mesh* memory, const char* path, uint32_t indexStart, uint32_t indexEnd, uint8_t threadId);
 
 Scene::Scene(const char* path)
 {
@@ -75,7 +78,20 @@ Node* Scene::ParseNode(const aiNode* node)
 
 void Scene::ParseMesh(const aiScene* scene, void* memory, const char* path)
 {
-    for (uint32_t i = 0; i < scene->mNumMeshes; i++)
+    uint32_t halfIndex = scene->mNumMeshes / 2;
+
+    std::vector<std::thread> threads;
+
+    threads.push_back(std::thread(TestThread, scene, (Mesh*)memory, path, 0, halfIndex, 0));
+    threads.push_back(std::thread(TestThread, scene, (Mesh*)memory, path, halfIndex, scene->mNumMeshes, 1));
+
+    threads[0].join();
+    threads[1].join();
+}
+
+void TestThread(const aiScene* scene, Mesh* memory, const char* path, uint32_t indexStart, uint32_t indexEnd, uint8_t threadId)
+{
+    for (uint32_t i = indexStart; i < indexEnd; i++)
     {
         const aiMesh* mesh = scene->mMeshes[i];
         const uint32_t vertCount = mesh->mNumVertices;
@@ -104,7 +120,7 @@ void Scene::ParseMesh(const aiScene* scene, void* memory, const char* path)
             indices[currentIndex++] = mesh->mFaces[k].mIndices[2];
         }
 
-        Logger::Debug("Creating mesh number: %d\n", i);
+        //Logger::Debug("Creating mesh number: %d\n", i);
 
         aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
         aiString texPath;
@@ -116,22 +132,24 @@ void Scene::ParseMesh(const aiScene* scene, void* memory, const char* path)
             fullPath.append(basePath.string() + "/");
             fullPath.append(texPath.C_Str());
 
-            new (&static_cast<Mesh*>(memory)[i]) Mesh(
+            new (&memory[i]) Mesh(
                 vertices,
                 vertCount,
                 indices,
                 faceCount,
-                fullPath.c_str()
+                fullPath.c_str(),
+                threadId
             );
         }
         else
         {
-            new (&static_cast<Mesh*>(memory)[i]) Mesh(
+            new (&memory[i]) Mesh(
                 vertices,
                 vertCount,
                 indices,
                 faceCount,
-                nullptr
+                nullptr,
+                threadId
             );
         }
 
@@ -167,9 +185,9 @@ void Node::Draw(VkCommandBuffer commandBuffer, glm::mat4 accumulatedTransform, u
     glm::mat4 mat = m_Transform.model * accumulatedTransform;
     
     for (size_t i = 0; i < m_NumMeshes; i++)
-        m_Meshes[i]->Draw(commandBuffer, mat, frameNum);
+		m_Meshes[i]->Draw(commandBuffer, mat, frameNum);
     for (size_t i = 0; i < m_NumChildren; i++)
-        m_Children[i]->Draw(commandBuffer, mat, frameNum);
+    	m_Children[i]->Draw(commandBuffer, mat, frameNum);
 }
 
 void Node::AddChildren(Node* children)

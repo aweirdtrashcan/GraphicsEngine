@@ -20,7 +20,7 @@ void main() {
 	float distToL = length(toLight);
 	
 	float linearFalloff = distToL * lightBuffer.linearFalloff;
-	float quadraticFalloff = distToL * lightBuffer.quadraticFalloff;
+	float quadraticFalloff = distToL * (lightBuffer.quadraticFalloff * lightBuffer.quadraticFalloff);
 	float constant = lightBuffer.constantFalloff;
 
 	float attenuation = 1 / (constant + linearFalloff + quadraticFalloff);

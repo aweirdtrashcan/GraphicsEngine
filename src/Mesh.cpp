@@ -10,9 +10,10 @@
 #include "exception/RendererException.h"
 #include "stb/stb_image.h"
 
-Mesh::Mesh(Vertex* vertices, uint32_t numVertices, uint32_t* indices, uint32_t numIndices, const char* texturePath)
+Mesh::Mesh(Vertex* vertices, uint32_t numVertices, uint32_t* indices, uint32_t numIndices, const char* texturePath, uint8_t threadId)
 	:
-	m_NumIndices(numIndices)
+	m_NumIndices(numIndices),
+	m_ThreadId(threadId)
 {
 	const Renderer* renderer = Renderer::Get();
 
@@ -70,7 +71,7 @@ void Mesh::Draw(VkCommandBuffer commandBuffer, const glm::mat4& transform, uint3
 	
 	vkCmdBindVertexBuffers(commandBuffer, 0, 1, &m_VertexBuffer.buffer, offsets);
 	vkCmdBindIndexBuffer(commandBuffer, m_IndexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-
+	
 	VkDescriptorSet sets[] = { m_VertexDescSet[frameNum], m_FragmentDescSet[frameNum] };
 	vkCmdBindDescriptorSets(
 		commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -112,7 +113,7 @@ void Mesh::CreateMeshBuffers(uint32_t indexCount, uint32_t* indices, uint32_t ve
 	void* mappedIndexBuffer = renderer->MapBuffer(stagingIndexBuffer);
 	memcpy(mappedIndexBuffer, indices, indexCount * sizeof(uint32_t));
 
-	VkCommandBuffer commandBuffer = renderer->GetTransientTransferCommandBuffer();
+	VkCommandBuffer commandBuffer = renderer->GetTransientTransferCommandBuffer(m_ThreadId);
 
 	VkBufferCopy vertexRegion;
 	vertexRegion.srcOffset = 0;
@@ -127,7 +128,13 @@ void Mesh::CreateMeshBuffers(uint32_t indexCount, uint32_t* indices, uint32_t ve
 	vkCmdCopyBuffer(commandBuffer, stagingVertexBuffer.buffer, vertexBuffer.buffer, 1, &vertexRegion);
 	vkCmdCopyBuffer(commandBuffer, stagingIndexBuffer.buffer, indexBuffer.buffer, 1, &indexRegion);
 
-	renderer->EndTransientTransferCommandBuffer(commandBuffer, VK_NULL_HANDLE);
+	VkFence fence = renderer->CreateFence();
+
+	renderer->EndTransientTransferCommandBuffer(commandBuffer, fence, m_ThreadId);
+
+	vkWaitForFences(renderer->GetLogicalDevice(), 1, &fence, VK_TRUE, UINT64_MAX);
+
+	renderer->DestroyFence(fence);
 
 	renderer->DestroyBuffer(stagingIndexBuffer);
 	renderer->DestroyBuffer(stagingVertexBuffer);
@@ -145,12 +152,12 @@ void Mesh::CreateDescriptorSets(const Renderer* renderer)
 	for (uint32_t i = 0; i < frameNum; i++)
 	{
 		m_VertexDescSet[i] = renderer->CreateDescriptorSet(
-			renderer->GetDescriptorPool(),
+			renderer->GetDescriptorPool(m_ThreadId),
 			renderer->GetDescriptorSetLayout(DESCRIPTOR_SET_TYPE_VERTEX_UNIFORM), 1
 		);
 
 		m_FragmentDescSet[i] = renderer->CreateDescriptorSet(
-			renderer->GetDescriptorPool(),
+			renderer->GetDescriptorPool(m_ThreadId),
 			renderer->GetDescriptorSetLayout(DESCRIPTOR_SET_TYPE_FRAGMENT_UNIFORM_BUFFER_COMBINED_IMAGE_SAMPLER), 1
 		);
 	}
@@ -283,7 +290,7 @@ void Mesh::CreateTextureImage(const Renderer* renderer, const char* texturePath)
 
 	renderer->CreateImageView(gpuImage);
 
-	VkCommandBuffer commandBuffer = renderer->GetTransientTransferCommandBuffer();
+	VkCommandBuffer commandBuffer = renderer->GetTransientTransferCommandBuffer(m_ThreadId);
 	
 	renderer->ImageBarrier(
 		commandBuffer,
@@ -317,7 +324,7 @@ void Mesh::CreateTextureImage(const Renderer* renderer, const char* texturePath)
 		VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
 	);
 	
-	renderer->EndTransientTransferCommandBuffer(commandBuffer, fence);
+	renderer->EndTransientTransferCommandBuffer(commandBuffer, fence, m_ThreadId);
 
 	vkWaitForFences(renderer->GetLogicalDevice(), 1, &fence, VK_TRUE, UINT64_MAX);
 

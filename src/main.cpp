@@ -12,7 +12,7 @@ int main() {
 #endif
 	try
 	{
-		Engine engine(800, 600);
+		Engine engine(1800, 1000);
 		engine.Run();
 	}
 	catch (const StimplyExceptionBase& e)

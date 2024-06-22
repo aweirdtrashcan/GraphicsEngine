@@ -72,7 +72,8 @@ Renderer::Renderer(uint16_t width, uint16_t height, Window* window, ImGuiManager
 		VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 		VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
 	};
-	m_DescriptorPool= CreateDescriptorPool(types, _countof(types), 1000, 10000, true);
+	m_DescriptorPool[0] = CreateDescriptorPool(types, _countof(types), 1000, 10000, true);
+	m_DescriptorPool[1] = CreateDescriptorPool(types, _countof(types), 1000, 10000, true);
 	VkDescriptorType uboTypes[] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER };
 	VkDescriptorType cisTypes[] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER };
 	m_DescriptorSetLayouts[DESCRIPTOR_SET_TYPE_VERTEX_UNIFORM] = CreateDescriptorSetLayout(uboTypes, _countof(uboTypes), 1, VK_SHADER_STAGE_VERTEX_BIT);
@@ -80,7 +81,8 @@ Renderer::Renderer(uint16_t width, uint16_t height, Window* window, ImGuiManager
 	m_DescriptorSetLayouts[DESCRIPTOR_SET_TYPE_FRAGMENT_UNIFORM_BUFFER_COMBINED_IMAGE_SAMPLER] =
 		CreateDescriptorSetLayout(cisTypes, _countof(cisTypes), 1, VK_SHADER_STAGE_FRAGMENT_BIT);
 	m_GraphicsCommandPool = CreateCommandPool(true, false, m_GraphicsQueueIndex);
-	m_TransferCommandPool = CreateCommandPool(true, true, m_TransferQueueIndex);
+	m_TransferCommandPool[0] = CreateCommandPool(true, true, m_TransferQueueIndex);
+	m_TransferCommandPool[1] = CreateCommandPool(true, true, m_TransferQueueIndex);
 	CreateGraphicsCommandBuffers(m_CommandBuffers);
 
 	Shader shaders[2];
@@ -128,11 +130,13 @@ Renderer::~Renderer() {
 	DestroyBuffer(m_IndexBuffer);
 	DestroyBuffer(m_VertexBuffer);
 	DestroyGraphicsCommandBuffers(m_CommandBuffers);
-	vkDestroyCommandPool(m_LogicalDevice, m_TransferCommandPool, m_Allocator);
+	for (VkCommandPool pool : m_TransferCommandPool)
+		vkDestroyCommandPool(m_LogicalDevice, pool, m_Allocator);
 	vkDestroyCommandPool(m_LogicalDevice, m_GraphicsCommandPool, m_Allocator);
 	for (VkDescriptorSetLayout setLayouts : m_DescriptorSetLayouts)
 		vkDestroyDescriptorSetLayout(m_LogicalDevice, setLayouts, m_Allocator);
-	vkDestroyDescriptorPool(m_LogicalDevice, m_DescriptorPool, m_Allocator);
+	for (VkDescriptorPool pool : m_DescriptorPool)
+		vkDestroyDescriptorPool(m_LogicalDevice, pool, m_Allocator);
 	DestroyDepthBuffer(m_DepthBuffer);
 	DestroyFramebuffers(m_Framebuffer);
 	vkDestroyRenderPass(m_LogicalDevice, m_RenderPass, m_Allocator);
@@ -222,11 +226,13 @@ bool Renderer::BeginFrame(float deltaTime) {
 	{
 		if (ImGui::Begin("Light"))
 		{
-			ImGui::SliderFloat3("Pos", &m_WorldLights[i].m_Position.x, -100.f, 100.f);
+			ImGui::SliderFloat3("Pos", &m_WorldLights[i].m_Position.x, -100.f, 1000.f);
 			ImGui::ColorEdit3("Light Color", &m_WorldLights[i].m_Color.x);
 			ImGui::SliderFloat("Constant falloff", &m_WorldLights[i].constantFalloff, 0.0f, 2.0f);
-			ImGui::SliderFloat("Linear falloff", &m_WorldLights[i].linearFalloff, 0.0f, 1.0f);
-			ImGui::SliderFloat("Quadratic falloff", &m_WorldLights[i].quadraticFalloff, 0.0f, 0.1f);
+			ImGui::SliderFloat("Linear falloff", &m_WorldLights[i].linearFalloff, 0.0014f, 0.7f, "%.5f");
+			ImGui::SliderFloat("Quadratic falloff", &m_WorldLights[i].quadraticFalloff, 0.000007f, 0.0075f, "%.7f");
+
+			SetAttenuationByDistance(i);
 		}
 		ImGui::End();	
 	}
@@ -342,7 +348,7 @@ ImGui_ImplVulkan_InitInfo Renderer::GetVulkanImGuiInitInfo() const
 	initInfo.Device = m_LogicalDevice;
 	initInfo.QueueFamily = m_GraphicsQueueIndex;
 	initInfo.Queue = m_GraphicsQueue;
-	initInfo.DescriptorPool = m_DescriptorPool;
+	initInfo.DescriptorPool = m_DescriptorPool[0];
 	initInfo.RenderPass = m_RenderPass;
 	initInfo.MinImageCount = m_Framecount;
 	initInfo.ImageCount = m_Framecount;
@@ -369,7 +375,7 @@ void Renderer::CopyBufferToImage(VkCommandBuffer commandBuffer, const GPUBuffer&
 	copyRegion.imageSubresource.mipLevel = 0;
 	copyRegion.imageSubresource.baseArrayLayer = 0;
 	copyRegion.imageOffset = {};
-	copyRegion.imageExtent.depth = 1.0f;
+	copyRegion.imageExtent.depth = 1;
 	copyRegion.imageExtent.width = static_cast<uint32_t>(image.width);
 	copyRegion.imageExtent.height = static_cast<uint32_t>(image.height);
 	
@@ -603,8 +609,8 @@ void Renderer::DestroyDebugUtils(VkInstance instance, VkDebugUtilsMessengerEXT m
 }
 
 VkDevice Renderer::CreateLogicalDevice(VkPhysicalDevice physicalDevice, const std::vector<OptionalVulkanRequest>& deviceExtensions,
-									   const VkPhysicalDeviceFeatures& requestedFeatures, VkQueue& graphicsQueue, VkQueue& transferQueue,
-									   uint32_t& graphicsQueueIndex, uint32_t& transferQueueIndex) const {
+                                       const VkPhysicalDeviceFeatures& requestedFeatures, VkQueue& graphicsQueue, VkQueue* transferQueue,
+                                       uint32_t& graphicsQueueIndex, uint32_t& transferQueueIndex) const {
 	VkDevice device;
 
 	uint32_t supportedExtensionCount = 0;
@@ -643,7 +649,7 @@ VkDevice Renderer::CreateLogicalDevice(VkPhysicalDevice physicalDevice, const st
 
 	std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
 
-	float priority = 1.0f;
+	float priority[2] = { 1.0f, 1.0f };
 
 	VkDeviceQueueCreateInfo graphicsQueueCreateInfo;
 	graphicsQueueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -651,7 +657,7 @@ VkDevice Renderer::CreateLogicalDevice(VkPhysicalDevice physicalDevice, const st
 	graphicsQueueCreateInfo.flags = 0;
 	graphicsQueueCreateInfo.queueFamilyIndex = indices.graphics;
 	graphicsQueueCreateInfo.queueCount = 1;
-	graphicsQueueCreateInfo.pQueuePriorities = &priority;
+	graphicsQueueCreateInfo.pQueuePriorities = priority;
 	queueCreateInfos.push_back(graphicsQueueCreateInfo);
 
 	bool& hasTransfer = const_cast<bool&>(m_HasTransferQueue);
@@ -662,8 +668,8 @@ VkDevice Renderer::CreateLogicalDevice(VkPhysicalDevice physicalDevice, const st
 		transferQueueCreateInfo.pNext = nullptr;
 		transferQueueCreateInfo.flags = 0;
 		transferQueueCreateInfo.queueFamilyIndex = indices.transfer;
-		transferQueueCreateInfo.queueCount = 1;
-		transferQueueCreateInfo.pQueuePriorities = &priority;
+		transferQueueCreateInfo.queueCount = 2;
+		transferQueueCreateInfo.pQueuePriorities = priority;
 		queueCreateInfos.push_back(transferQueueCreateInfo);
 		hasTransfer = true;
 	}
@@ -685,9 +691,12 @@ VkDevice Renderer::CreateLogicalDevice(VkPhysicalDevice physicalDevice, const st
 	std::vector<VkQueue> queues;
 
 	for (size_t i = 0; i < queueCreateInfos.size(); i++) {
-		VkQueue queue;
-		vkGetDeviceQueue(device, queueCreateInfos[i].queueFamilyIndex, 0, &queue);
-		queues.push_back(queue);
+		for (uint32_t j = 0; j < queueCreateInfos[i].queueCount; j++)
+		{
+			VkQueue queue;
+			vkGetDeviceQueue(device, queueCreateInfos[i].queueFamilyIndex, j, &queue);
+			queues.push_back(queue);	
+		}
 	}
 
 	if (!hasTransfer) {
@@ -695,7 +704,8 @@ VkDevice Renderer::CreateLogicalDevice(VkPhysicalDevice physicalDevice, const st
 	}
 
 	graphicsQueue = queues[0];
-	transferQueue = queues[1];
+	transferQueue[0] = queues[1];
+	transferQueue[1] = queues[2];
 
 	graphicsQueueIndex = queueCreateInfos[0].queueFamilyIndex;
 	transferQueueIndex = queueCreateInfos[1].queueFamilyIndex;
@@ -1582,7 +1592,7 @@ void Renderer::CreateVertexBuffer() {
 	void* mapped = MapBuffer(temporaryBuffer);
 	memcpy(mapped, vBuffer, sizeof(vBuffer));
 
-	VkCommandBuffer commandBuffer = GetTransientTransferCommandBuffer();
+	VkCommandBuffer commandBuffer = GetTransientTransferCommandBuffer(0);
 	vkWaitForFences(m_LogicalDevice, 1, &m_TransferFences[0], VK_TRUE, UINT64_MAX);
 	vkResetFences(m_LogicalDevice, 1, &m_TransferFences[0]);
 
@@ -1593,7 +1603,7 @@ void Renderer::CreateVertexBuffer() {
 
 	vkCmdCopyBuffer(commandBuffer, temporaryBuffer.buffer, m_VertexBuffer.buffer, 1, &region);
 	
-	EndTransientTransferCommandBuffer(commandBuffer, m_TransferFences[0]);
+	EndTransientTransferCommandBuffer(commandBuffer, m_TransferFences[0], 0);
 	vkWaitForFences(m_LogicalDevice, 1, &m_TransferFences[0], VK_TRUE, UINT64_MAX);
 	DestroyBuffer(temporaryBuffer);
 }
@@ -1609,7 +1619,7 @@ void Renderer::CreateIndexBuffer() {
 	void* mapped = MapBuffer(tempBuffer);
 	memcpy(mapped, indices, sizeof(indices));
 
-	VkCommandBuffer commandBuffer = GetTransientTransferCommandBuffer();
+	VkCommandBuffer commandBuffer = GetTransientTransferCommandBuffer(0);
 	vkWaitForFences(m_LogicalDevice, 1, &m_TransferFences[0], VK_TRUE, UINT64_MAX);
 	vkResetFences(m_LogicalDevice, 1, &m_TransferFences[0]);
 
@@ -1620,13 +1630,13 @@ void Renderer::CreateIndexBuffer() {
 
 	vkCmdCopyBuffer(commandBuffer, tempBuffer.buffer, m_IndexBuffer.buffer, 1, &region);
 
-	EndTransientTransferCommandBuffer(commandBuffer, m_TransferFences[0]);
+	EndTransientTransferCommandBuffer(commandBuffer, m_TransferFences[0], 0);
 	vkWaitForFences(m_LogicalDevice, 1, &m_TransferFences[0], VK_TRUE, UINT64_MAX);
 	DestroyBuffer(tempBuffer);
 }
 
-VkCommandBuffer Renderer::GetTransientTransferCommandBuffer() const {
-	VkCommandBuffer commandBuffer = AllocateCommandBuffer(m_TransferCommandPool);
+VkCommandBuffer Renderer::GetTransientTransferCommandBuffer(uint8_t threadId) const {
+	VkCommandBuffer commandBuffer = AllocateCommandBuffer(m_TransferCommandPool[threadId]);
 
 	VkCommandBufferBeginInfo beginInfo;
 	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -1639,7 +1649,8 @@ VkCommandBuffer Renderer::GetTransientTransferCommandBuffer() const {
 	return commandBuffer;
 }
 
-void Renderer::EndTransientTransferCommandBuffer(VkCommandBuffer commandBuffer, VkFence fenceToSignal) const {
+void Renderer::EndTransientTransferCommandBuffer(VkCommandBuffer commandBuffer, VkFence fenceToSignal, uint8_t threadId) const {
+	if (fenceToSignal == nullptr) __debugbreak();
 	vkEndCommandBuffer(commandBuffer);
 
 	VkPipelineStageFlags stages[] = { VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT };
@@ -1655,14 +1666,14 @@ void Renderer::EndTransientTransferCommandBuffer(VkCommandBuffer commandBuffer, 
 	submit.signalSemaphoreCount = 0;
 	submit.pSignalSemaphores = nullptr;
 
-	vkQueueSubmit(m_TransferQueue, 1, &submit, fenceToSignal);
+	vkQueueSubmit(m_TransferQueue[threadId], 1, &submit, fenceToSignal);
 	if (fenceToSignal) {
 		vkWaitForFences(m_LogicalDevice, 1, &fenceToSignal, VK_TRUE, UINT64_MAX);
 	} else {
 		vkDeviceWaitIdle(m_LogicalDevice);
 	}
 
-	vkFreeCommandBuffers(m_LogicalDevice, m_TransferCommandPool, 1, &commandBuffer);
+	vkFreeCommandBuffers(m_LogicalDevice, m_TransferCommandPool[threadId], 1, &commandBuffer);
 }
 
 void* Renderer::MapBuffer(const GPUBuffer& buffer) const {
@@ -1720,7 +1731,7 @@ void Renderer::UpdateVPBuffer(float deltaTime) {
 	glm::vec3 rightVector = glm::normalize(glm::cross(up, direction));
 	glm::vec3 cameraUp = glm::cross(direction, rightVector);
 
-	float cameraSpeed = deltaTime;
+	float cameraSpeed = 20.0f * deltaTime;
 
 	if (m_Window->IsKeyPressed(KeyCode::Shift)) {
 		cameraSpeed *= 4.0f;
@@ -1744,11 +1755,11 @@ void Renderer::UpdateVPBuffer(float deltaTime) {
 		}
 		if (m_Window->IsKeyPressed(KeyCode::Space))
 		{
-			cameraPos += cameraUp * cameraSpeed;
+			cameraPos += up * cameraSpeed;
 		}
 		if (m_Window->IsKeyPressed(KeyCode::Control))
 		{
-			cameraPos -= cameraUp * cameraSpeed;
+			cameraPos -= up * cameraSpeed;
 		}	
 	}
 
@@ -1860,6 +1871,49 @@ VkSampler Renderer::CreateSampler() const
 	VkRes(vkCreateSampler(m_LogicalDevice, &createInfo, m_Allocator, &sampler), "Failed to create sampler!");
 
 	return sampler;
+}
+
+void Renderer::SetAttenuationByDistance(size_t lightIndex)
+{
+	if (ImGui::Begin("Attenuation Presets By Distance"))
+	{
+		if (ImGui::Button("3250"))
+		{
+			m_WorldLights[lightIndex].linearFalloff = 0.0014f;
+			m_WorldLights[lightIndex].quadraticFalloff = 0.000007f;
+		}
+	}
+	ImGui::End();
+
+	if (ImGui::Begin("Attenuation Presets By Distance"))
+	{
+		if (ImGui::Button("600"))
+		{
+			m_WorldLights[lightIndex].linearFalloff = 0.007f;
+			m_WorldLights[lightIndex].quadraticFalloff = 0.0002f;
+		}
+	}
+	ImGui::End();
+
+	if (ImGui::Begin("Attenuation Presets By Distance"))
+	{
+		if (ImGui::Button("325"))
+		{
+			m_WorldLights[lightIndex].linearFalloff = 0.014f;
+			m_WorldLights[lightIndex].quadraticFalloff = 0.0007f;
+		}
+	}
+	ImGui::End();
+
+	if (ImGui::Begin("Attenuation Presets By Distance"))
+	{
+		if (ImGui::Button("200"))
+		{
+			m_WorldLights[lightIndex].linearFalloff = 0.022f;
+			m_WorldLights[lightIndex].quadraticFalloff = 0.0019f;
+		}
+	}
+	ImGui::End();
 }
 
 VkBool32 Renderer::debugUtilsMessenger(

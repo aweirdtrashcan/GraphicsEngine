@@ -41,7 +41,7 @@ void Engine::OnEvent(EventCode code, const Event& event)
 {
 	if (code == EVENT_KEY_PRESSED)
 	{
-		if (event.context.u32[0] == (int)KeyCode::Escape)
+		if (event.context.u32[0] == (int)KeyCode::Key_H)
 		{
 			if (!m_ShowingMouse)
 			{
@@ -56,7 +56,7 @@ void Engine::OnEvent(EventCode code, const Event& event)
 				m_ShowingMouse = false;
 			}
 		}
-		if (event.context.u32[0] == (int)KeyCode::Backspace)
+		if (event.context.u32[0] == (int)KeyCode::Escape)
 		{
 			// re-use event, since EVENT_WINDOW_CLOSE doesn't expect any context...
 			EventManager::FireEvent(EVENT_WINDOW_CLOSE, event);

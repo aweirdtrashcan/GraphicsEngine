@@ -9,7 +9,7 @@ struct Light;
 
 class Mesh {
 public:
-	Mesh(Vertex* vertices, uint32_t numVertices, uint32_t* indices, uint32_t numIndices, const char* texturePath);
+	Mesh(Vertex* vertices, uint32_t numVertices, uint32_t* indices, uint32_t numIndices, const char* texturePath, uint8_t threadId = 0);
 	Mesh(const Mesh& rhs) = delete;
 	Mesh& operator=(const Mesh& rhs) = delete;
 	~Mesh();
@@ -39,5 +39,7 @@ protected:
 	GPUUniformBuffer m_VertexUBO;
 	GPUUniformBuffer m_FragmentUBO;
 	GPUImage m_TextureImage;
+
+	uint8_t m_ThreadId = 0;
 };
 
