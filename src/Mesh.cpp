@@ -113,7 +113,7 @@ void Mesh::CreateMeshBuffers(uint32_t indexCount, uint32_t* indices, uint32_t ve
 	void* mappedIndexBuffer = renderer->MapBuffer(stagingIndexBuffer);
 	memcpy(mappedIndexBuffer, indices, indexCount * sizeof(uint32_t));
 
-	VkCommandBuffer commandBuffer = renderer->GetTransientTransferCommandBuffer(m_ThreadId);
+	VkCommandBuffer commandBuffer = renderer->GetTransientTransferCommandBuffer(m_ThreadId, false);
 
 	VkBufferCopy vertexRegion;
 	vertexRegion.srcOffset = 0;
@@ -130,7 +130,7 @@ void Mesh::CreateMeshBuffers(uint32_t indexCount, uint32_t* indices, uint32_t ve
 
 	VkFence fence = renderer->CreateFence();
 
-	renderer->EndTransientTransferCommandBuffer(commandBuffer, fence, m_ThreadId);
+	renderer->EndTransientTransferCommandBuffer(commandBuffer, fence, m_ThreadId, false);
 
 	vkWaitForFences(renderer->GetLogicalDevice(), 1, &fence, VK_TRUE, UINT64_MAX);
 
@@ -271,7 +271,7 @@ void Mesh::CreateTextureImage(const Renderer* renderer, const char* texturePath)
 		texturePath = "./Models/no_texture.png";
 	}
 	
-	stbi_uc* image = stbi_load(texturePath, &x, &y, &numChannels, 4);
+	stbi_uc* image = stbi_load(texturePath, &x, &y, &numChannels, STBI_rgb_alpha);
 
 	if (!image)
 	{
@@ -279,18 +279,20 @@ void Mesh::CreateTextureImage(const Renderer* renderer, const char* texturePath)
 		throw RendererException("Failed to load image");
 	}
 
+	uint16_t mipLevels = Renderer::CalculateMipMaps<uint16_t>(x, y);
+	
 	GPUImage gpuImage = renderer->CreateImage(
 		VK_FORMAT_R8G8B8A8_SRGB,
 		VK_IMAGE_ASPECT_COLOR_BIT,
-		VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+		VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
 		(uint16_t)x, (int16_t)y,
-		1, VK_SAMPLE_COUNT_1_BIT,
+		mipLevels, VK_SAMPLE_COUNT_1_BIT,
 		VK_IMAGE_TILING_OPTIMAL
 	);
 
 	renderer->CreateImageView(gpuImage);
 
-	VkCommandBuffer commandBuffer = renderer->GetTransientTransferCommandBuffer(m_ThreadId);
+	VkCommandBuffer commandBuffer = renderer->GetTransientTransferCommandBuffer(m_ThreadId, true);
 	
 	renderer->ImageBarrier(
 		commandBuffer,
@@ -313,7 +315,9 @@ void Mesh::CreateTextureImage(const Renderer* renderer, const char* texturePath)
 	
 	memcpy(stagingBuffer.mappedBuffer, image, imageSizeInBytes);
 	
-	renderer->CopyBufferToImage(commandBuffer, stagingBuffer, gpuImage);
+	renderer->CopyBufferToImage(commandBuffer, stagingBuffer, gpuImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+	renderer->GenerateMipMaps(commandBuffer, gpuImage);
 	
 	renderer->ImageBarrier(
 		commandBuffer,
@@ -324,7 +328,7 @@ void Mesh::CreateTextureImage(const Renderer* renderer, const char* texturePath)
 		VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
 	);
 	
-	renderer->EndTransientTransferCommandBuffer(commandBuffer, fence, m_ThreadId);
+	renderer->EndTransientTransferCommandBuffer(commandBuffer, fence, m_ThreadId, true);
 
 	vkWaitForFences(renderer->GetLogicalDevice(), 1, &fence, VK_TRUE, UINT64_MAX);
 

@@ -32,7 +32,7 @@ Renderer::Renderer(uint16_t width, uint16_t height, Window* window, ImGuiManager
 	features.samplerAnisotropy = VK_TRUE;
 	features.sampleRateShading = VK_TRUE;
 	features.depthClamp = VK_TRUE;
-
+	
 	m_PhysicalDevice = PickPhysicalDevice(m_Instance, features);
 	m_PhysicalDeviceInfo = GetPhysicalDeviceInfo(m_PhysicalDevice);
 
@@ -80,7 +80,8 @@ Renderer::Renderer(uint16_t width, uint16_t height, Window* window, ImGuiManager
 	m_DescriptorSetLayouts[DESCRIPTOR_SET_TYPE_FRAGMENT_UNIFORM] = CreateDescriptorSetLayout(uboTypes, _countof(uboTypes), 1, VK_SHADER_STAGE_FRAGMENT_BIT);
 	m_DescriptorSetLayouts[DESCRIPTOR_SET_TYPE_FRAGMENT_UNIFORM_BUFFER_COMBINED_IMAGE_SAMPLER] =
 		CreateDescriptorSetLayout(cisTypes, _countof(cisTypes), 1, VK_SHADER_STAGE_FRAGMENT_BIT);
-	m_GraphicsCommandPool = CreateCommandPool(true, false, m_GraphicsQueueIndex);
+	m_GraphicsCommandPool[0] = CreateCommandPool(true, false, m_GraphicsQueueIndex);
+	m_GraphicsCommandPool[1] = CreateCommandPool(true, false, m_GraphicsQueueIndex);
 	m_TransferCommandPool[0] = CreateCommandPool(true, true, m_TransferQueueIndex);
 	m_TransferCommandPool[1] = CreateCommandPool(true, true, m_TransferQueueIndex);
 	CreateGraphicsCommandBuffers(m_CommandBuffers);
@@ -112,9 +113,9 @@ Renderer::Renderer(uint16_t width, uint16_t height, Window* window, ImGuiManager
 	RegisterForEvents();
 
 	Light centralLight;
-	centralLight.m_Position = { 0.0f, 28.0f, 0.0f };
-	centralLight.linearFalloff = 0.08f;
-	centralLight.quadraticFalloff = 0.01f;
+	centralLight.m_Position = { 0.0f, 550.0f, 0.0f };
+	centralLight.linearFalloff = 0.0014f;
+	centralLight.quadraticFalloff = 0.000007f;
 	m_WorldLights.push_back(centralLight);
 
 	m_Sampler = CreateSampler();
@@ -132,7 +133,8 @@ Renderer::~Renderer() {
 	DestroyGraphicsCommandBuffers(m_CommandBuffers);
 	for (VkCommandPool pool : m_TransferCommandPool)
 		vkDestroyCommandPool(m_LogicalDevice, pool, m_Allocator);
-	vkDestroyCommandPool(m_LogicalDevice, m_GraphicsCommandPool, m_Allocator);
+	for (VkCommandPool pool : m_GraphicsCommandPool)
+		vkDestroyCommandPool(m_LogicalDevice, pool, m_Allocator);;
 	for (VkDescriptorSetLayout setLayouts : m_DescriptorSetLayouts)
 		vkDestroyDescriptorSetLayout(m_LogicalDevice, setLayouts, m_Allocator);
 	for (VkDescriptorPool pool : m_DescriptorPool)
@@ -269,7 +271,7 @@ void Renderer::EndFrame()
 	submitInfo.signalSemaphoreCount = 1;
 	submitInfo.pSignalSemaphores = &m_CurrQueueSubmt;
 
-	VkResult result = vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, m_CurrFence);
+	VkResult result = vkQueueSubmit(m_GraphicsQueue[0], 1, &submitInfo, m_CurrFence);
 
 	if (result == VK_ERROR_OUT_OF_DATE_KHR) {
 		RecreateSwapchain();
@@ -286,7 +288,7 @@ void Renderer::EndFrame()
 	presentInfo.pImageIndices = &m_FrameIndex;
 	presentInfo.pResults = VK_NULL_HANDLE;
 
-	result = vkQueuePresentKHR(m_GraphicsQueue, &presentInfo);
+	result = vkQueuePresentKHR(m_GraphicsQueue[0], &presentInfo);
 
 	if (result == VK_ERROR_OUT_OF_DATE_KHR) {
 		RecreateSwapchain();
@@ -347,7 +349,7 @@ ImGui_ImplVulkan_InitInfo Renderer::GetVulkanImGuiInitInfo() const
 	initInfo.PhysicalDevice = m_PhysicalDevice;
 	initInfo.Device = m_LogicalDevice;
 	initInfo.QueueFamily = m_GraphicsQueueIndex;
-	initInfo.Queue = m_GraphicsQueue;
+	initInfo.Queue = m_GraphicsQueue[0];
 	initInfo.DescriptorPool = m_DescriptorPool[0];
 	initInfo.RenderPass = m_RenderPass;
 	initInfo.MinImageCount = m_Framecount;
@@ -364,7 +366,7 @@ ImGui_ImplVulkan_InitInfo Renderer::GetVulkanImGuiInitInfo() const
 	return initInfo;
 }
 
-void Renderer::CopyBufferToImage(VkCommandBuffer commandBuffer, const GPUBuffer& buffer, const GPUImage& image) const
+void Renderer::CopyBufferToImage(VkCommandBuffer commandBuffer, const GPUBuffer& buffer, const GPUImage& image, VkImageLayout imageLayout) const
 {
 	VkBufferImageCopy copyRegion;
 	copyRegion.bufferOffset = 0;
@@ -379,7 +381,80 @@ void Renderer::CopyBufferToImage(VkCommandBuffer commandBuffer, const GPUBuffer&
 	copyRegion.imageExtent.width = static_cast<uint32_t>(image.width);
 	copyRegion.imageExtent.height = static_cast<uint32_t>(image.height);
 	
-	vkCmdCopyBufferToImage(commandBuffer, buffer.buffer, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
+	vkCmdCopyBufferToImage(commandBuffer, buffer.buffer, image.image, imageLayout, 1, &copyRegion);
+}
+
+void Renderer::GenerateMipMaps(VkCommandBuffer commandBuffer, GPUImage& image) const
+{
+	VkOffset3D srcExtent = { image.width, image.height, 1 };
+	VkOffset3D dstExtent = { image.width, image.height, 1 };
+
+	VkImageLayout oldLayout = image.layout;
+
+	if (image.layout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+	{
+		throw RendererException("Trying to Generate MipMaps but image layout is not VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL");
+	}
+	
+	for (uint32_t i = 1; i < image.mipLevels; i++)
+	{
+		dstExtent.x	= srcExtent.x / 2;
+		dstExtent.y = srcExtent.y / 2;
+		
+		VkImageSubresourceLayers srcSubres;
+		srcSubres.aspectMask = image.aspect;
+		srcSubres.mipLevel = i - 1;
+		srcSubres.baseArrayLayer = 0;
+		srcSubres.layerCount = 1;
+
+		VkImageSubresourceLayers dstSubres;
+		dstSubres.aspectMask = image.aspect;
+		dstSubres.mipLevel = i;
+		dstSubres.baseArrayLayer = 0;
+		dstSubres.layerCount = 1;
+
+		ImageBarrier(
+			commandBuffer,
+			image,
+			VK_ACCESS_MEMORY_WRITE_BIT,
+			VK_ACCESS_MEMORY_READ_BIT,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			i - 1
+		);
+		
+		VkImageBlit blit;
+		blit.srcSubresource = srcSubres;
+		blit.srcOffsets[0] = { 0, 0, 0 };
+		blit.srcOffsets[1] = srcExtent;
+		blit.dstSubresource = dstSubres;
+		blit.dstOffsets[0] = { 0, 0, 0 };
+		blit.dstOffsets[1] = dstExtent;
+		
+		vkCmdBlitImage(
+			commandBuffer,
+			image.image,
+			VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			image.image,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			1,
+			&blit,
+			VK_FILTER_LINEAR
+		);
+
+		ImageBarrier(
+			commandBuffer,
+			image,
+			VK_ACCESS_MEMORY_READ_BIT,
+			VK_ACCESS_MEMORY_WRITE_BIT,
+			VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			i - 1
+		);
+		
+		srcExtent.x /= 2;
+		srcExtent.y /= 2;
+	}
 }
 
 VkDebugUtilsMessengerCreateInfoEXT Renderer::GetDebugMessengerCreateInfo() {
@@ -609,7 +684,7 @@ void Renderer::DestroyDebugUtils(VkInstance instance, VkDebugUtilsMessengerEXT m
 }
 
 VkDevice Renderer::CreateLogicalDevice(VkPhysicalDevice physicalDevice, const std::vector<OptionalVulkanRequest>& deviceExtensions,
-                                       const VkPhysicalDeviceFeatures& requestedFeatures, VkQueue& graphicsQueue, VkQueue* transferQueue,
+                                       const VkPhysicalDeviceFeatures& requestedFeatures, VkQueue* graphicsQueue, VkQueue* transferQueue,
                                        uint32_t& graphicsQueueIndex, uint32_t& transferQueueIndex) const {
 	VkDevice device;
 
@@ -656,7 +731,7 @@ VkDevice Renderer::CreateLogicalDevice(VkPhysicalDevice physicalDevice, const st
 	graphicsQueueCreateInfo.pNext = nullptr;
 	graphicsQueueCreateInfo.flags = 0;
 	graphicsQueueCreateInfo.queueFamilyIndex = indices.graphics;
-	graphicsQueueCreateInfo.queueCount = 1;
+	graphicsQueueCreateInfo.queueCount = 2;
 	graphicsQueueCreateInfo.pQueuePriorities = priority;
 	queueCreateInfos.push_back(graphicsQueueCreateInfo);
 
@@ -703,9 +778,10 @@ VkDevice Renderer::CreateLogicalDevice(VkPhysicalDevice physicalDevice, const st
 		queues.push_back(queues[0]);
 	}
 
-	graphicsQueue = queues[0];
-	transferQueue[0] = queues[1];
-	transferQueue[1] = queues[2];
+	graphicsQueue[0] = queues[0];
+	graphicsQueue[1] = queues[1];
+	transferQueue[0] = queues[2];
+	transferQueue[1] = queues[3];
 
 	graphicsQueueIndex = queueCreateInfos[0].queueFamilyIndex;
 	transferQueueIndex = queueCreateInfos[1].queueFamilyIndex;
@@ -1282,13 +1358,13 @@ VkCommandBuffer Renderer::AllocateCommandBuffer(VkCommandPool commandPool) const
 void Renderer::CreateGraphicsCommandBuffers(std::vector<VkCommandBuffer>& commandBuffers) const {
 	commandBuffers.resize(m_Framecount);
 	for (size_t i = 0; i < m_Framecount; i++) {
-		commandBuffers[i] = AllocateCommandBuffer(m_GraphicsCommandPool);
+		commandBuffers[i] = AllocateCommandBuffer(m_GraphicsCommandPool[0]);
 	}
 }
 
 void Renderer::DestroyGraphicsCommandBuffers(std::vector<VkCommandBuffer>& commandBuffers) const {
 	for (VkCommandBuffer cmdBuf : commandBuffers) {
-		vkFreeCommandBuffers(m_LogicalDevice, m_GraphicsCommandPool, 1, &cmdBuf);
+		vkFreeCommandBuffers(m_LogicalDevice, m_GraphicsCommandPool[0], 1, &cmdBuf);
 		cmdBuf = 0;
 	}
 }
@@ -1592,7 +1668,7 @@ void Renderer::CreateVertexBuffer() {
 	void* mapped = MapBuffer(temporaryBuffer);
 	memcpy(mapped, vBuffer, sizeof(vBuffer));
 
-	VkCommandBuffer commandBuffer = GetTransientTransferCommandBuffer(0);
+	VkCommandBuffer commandBuffer = GetTransientTransferCommandBuffer(0, false);
 	vkWaitForFences(m_LogicalDevice, 1, &m_TransferFences[0], VK_TRUE, UINT64_MAX);
 	vkResetFences(m_LogicalDevice, 1, &m_TransferFences[0]);
 
@@ -1603,7 +1679,7 @@ void Renderer::CreateVertexBuffer() {
 
 	vkCmdCopyBuffer(commandBuffer, temporaryBuffer.buffer, m_VertexBuffer.buffer, 1, &region);
 	
-	EndTransientTransferCommandBuffer(commandBuffer, m_TransferFences[0], 0);
+	EndTransientTransferCommandBuffer(commandBuffer, m_TransferFences[0], 0, false);
 	vkWaitForFences(m_LogicalDevice, 1, &m_TransferFences[0], VK_TRUE, UINT64_MAX);
 	DestroyBuffer(temporaryBuffer);
 }
@@ -1619,7 +1695,7 @@ void Renderer::CreateIndexBuffer() {
 	void* mapped = MapBuffer(tempBuffer);
 	memcpy(mapped, indices, sizeof(indices));
 
-	VkCommandBuffer commandBuffer = GetTransientTransferCommandBuffer(0);
+	VkCommandBuffer commandBuffer = GetTransientTransferCommandBuffer(0, false);
 	vkWaitForFences(m_LogicalDevice, 1, &m_TransferFences[0], VK_TRUE, UINT64_MAX);
 	vkResetFences(m_LogicalDevice, 1, &m_TransferFences[0]);
 
@@ -1630,13 +1706,17 @@ void Renderer::CreateIndexBuffer() {
 
 	vkCmdCopyBuffer(commandBuffer, tempBuffer.buffer, m_IndexBuffer.buffer, 1, &region);
 
-	EndTransientTransferCommandBuffer(commandBuffer, m_TransferFences[0], 0);
+	EndTransientTransferCommandBuffer(commandBuffer, m_TransferFences[0], 0, false);
 	vkWaitForFences(m_LogicalDevice, 1, &m_TransferFences[0], VK_TRUE, UINT64_MAX);
 	DestroyBuffer(tempBuffer);
 }
 
-VkCommandBuffer Renderer::GetTransientTransferCommandBuffer(uint8_t threadId) const {
-	VkCommandBuffer commandBuffer = AllocateCommandBuffer(m_TransferCommandPool[threadId]);
+VkCommandBuffer Renderer::GetTransientTransferCommandBuffer(uint8_t threadId, bool isGraphics) const {
+	VkCommandBuffer commandBuffer;
+	if (isGraphics)
+		commandBuffer = AllocateCommandBuffer(m_GraphicsCommandPool[threadId]);
+	else
+		commandBuffer = AllocateCommandBuffer(m_TransferCommandPool[threadId]);
 
 	VkCommandBufferBeginInfo beginInfo;
 	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -1649,7 +1729,7 @@ VkCommandBuffer Renderer::GetTransientTransferCommandBuffer(uint8_t threadId) co
 	return commandBuffer;
 }
 
-void Renderer::EndTransientTransferCommandBuffer(VkCommandBuffer commandBuffer, VkFence fenceToSignal, uint8_t threadId) const {
+void Renderer::EndTransientTransferCommandBuffer(VkCommandBuffer commandBuffer, VkFence fenceToSignal, uint8_t threadId, bool isGraphics) const {
 	if (fenceToSignal == nullptr) __debugbreak();
 	vkEndCommandBuffer(commandBuffer);
 
@@ -1666,14 +1746,29 @@ void Renderer::EndTransientTransferCommandBuffer(VkCommandBuffer commandBuffer, 
 	submit.signalSemaphoreCount = 0;
 	submit.pSignalSemaphores = nullptr;
 
-	vkQueueSubmit(m_TransferQueue[threadId], 1, &submit, fenceToSignal);
+	VkQueue queue;
+	VkCommandPool pool;
+
+	if (isGraphics)
+	{
+		queue = m_GraphicsQueue[threadId];
+		pool = m_GraphicsCommandPool[threadId];
+	}
+	else
+	{
+		queue = m_TransferQueue[threadId];
+		pool = m_TransferCommandPool[threadId];
+	}
+
+	vkQueueSubmit(queue, 1, &submit, fenceToSignal);
+	
 	if (fenceToSignal) {
 		vkWaitForFences(m_LogicalDevice, 1, &fenceToSignal, VK_TRUE, UINT64_MAX);
 	} else {
 		vkDeviceWaitIdle(m_LogicalDevice);
 	}
-
-	vkFreeCommandBuffers(m_LogicalDevice, m_TransferCommandPool[threadId], 1, &commandBuffer);
+	
+	vkFreeCommandBuffers(m_LogicalDevice, pool, 1, &commandBuffer);
 }
 
 void* Renderer::MapBuffer(const GPUBuffer& buffer) const {
@@ -1818,9 +1913,41 @@ void Renderer::ImageBarrier(VkCommandBuffer commandBuffer, GPUImage& image, VkAc
 	VkImageSubresourceRange subresource;
 	subresource.aspectMask = image.aspect;
 	subresource.layerCount = 1;
-	subresource.levelCount = 1;
+	subresource.levelCount = image.mipLevels;
 	subresource.baseArrayLayer = 0;
 	subresource.baseMipLevel = 0;
+
+	VkImageMemoryBarrier barrier;
+	barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	barrier.pNext = nullptr;
+	barrier.srcAccessMask = srcMask;
+	barrier.dstAccessMask = dstMask;
+	barrier.oldLayout = oldLayout;
+	barrier.newLayout = newLayout;
+	barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barrier.image = image.image;
+	barrier.subresourceRange = subresource;
+
+	vkCmdPipelineBarrier(
+		commandBuffer,
+		VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+		0, 0, nullptr, 0, nullptr,
+		1, &barrier
+	);
+
+	image.layout = newLayout;
+}
+
+void Renderer::ImageBarrier(VkCommandBuffer commandBuffer, GPUImage& image, VkAccessFlags srcMask,
+	VkAccessFlags dstMask, VkImageLayout oldLayout, VkImageLayout newLayout, uint32_t mipLevel) const
+{
+	VkImageSubresourceRange subresource;
+	subresource.aspectMask = image.aspect;
+	subresource.layerCount = 1;
+	subresource.levelCount = 1;
+	subresource.baseArrayLayer = 0;
+	subresource.baseMipLevel = mipLevel;
 
 	VkImageMemoryBarrier barrier;
 	barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -1859,8 +1986,8 @@ VkSampler Renderer::CreateSampler() const
 	createInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
 	createInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
 	createInfo.mipLodBias = 0.0f;
-	createInfo.anisotropyEnable = VK_FALSE;
-	createInfo.maxAnisotropy = 1.0f;
+	createInfo.anisotropyEnable = VK_TRUE;
+	createInfo.maxAnisotropy = 16.0f;
 	createInfo.compareEnable = VK_FALSE;
 	createInfo.compareOp = VK_COMPARE_OP_NEVER;
 	createInfo.minLod = 0.0f;

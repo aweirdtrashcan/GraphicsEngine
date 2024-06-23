@@ -30,11 +30,6 @@ Scene::Scene(const char* path)
     m_Meshes = (Mesh*)malloc(sizeof(Mesh) * scene->mNumMeshes);
     m_NumMeshes = scene->mNumMeshes;
 
-    for (uint32_t i = 0; i < scene->mNumMaterials; i++)
-    {
-        
-    }
-    
     ParseMesh(scene, m_Meshes, path);
     m_RootNode = ParseNode(scene->mRootNode);
 }

@@ -77,8 +77,8 @@ public:
 	VkPipelineLayout			GetGraphicsPipelineLayout(PipelineType type) const { return m_PipelineLayouts[type]; }
 	VkDescriptorSetLayout		GetDescriptorSetLayout(DescriptorSetType type) const { return m_DescriptorSetLayouts[type]; }
 	VkDescriptorSet				CreateDescriptorSet(VkDescriptorPool descriptorPool, VkDescriptorSetLayout setLayout, uint32_t setCount) const;
-	VkCommandBuffer				GetTransientTransferCommandBuffer(uint8_t threadId) const;
-	void						EndTransientTransferCommandBuffer(VkCommandBuffer commandBuffer, VkFence fenceToSignal, uint8_t threadId) const;
+	VkCommandBuffer				GetTransientTransferCommandBuffer(uint8_t threadId, bool isGraphics = false) const;
+	void						EndTransientTransferCommandBuffer(VkCommandBuffer commandBuffer, VkFence fenceToSignal, uint8_t threadId, bool isGraphics) const;
 	VkDescriptorPool			GetDescriptorPool(uint8_t threadId) const { return m_DescriptorPool[threadId]; }
 	void						AddScene(const class Scene* scene);
 	VkFence						CreateFence() const;
@@ -87,9 +87,17 @@ public:
 	const std::vector<Light>	GetWorldLights() const { return m_WorldLights; }
 	uint32_t					GetFrameCount() const { return m_Framecount; }
 	void						ImageBarrier(VkCommandBuffer commandBuffer, GPUImage& image, VkAccessFlags srcMask, VkAccessFlags dstMask, VkImageLayout oldLayout, VkImageLayout newLayout) const;
+	void						ImageBarrier(VkCommandBuffer commandBuffer, GPUImage& image, VkAccessFlags srcMask,
+											 VkAccessFlags dstMask, VkImageLayout oldLayout, VkImageLayout newLayout, uint32_t mipLevel) const;
 	VkSampler					GetSampler() const { return m_Sampler; }
-	void						CopyBufferToImage(VkCommandBuffer commandBuffer, const GPUBuffer& buffer, const GPUImage& image) const;
-	
+	void						CopyBufferToImage(VkCommandBuffer commandBuffer, const GPUBuffer& buffer, const GPUImage& image, VkImageLayout imageLayout) const;
+	template<typename T>
+	static T					CalculateMipMaps(T width, T height)
+	{
+		return static_cast<T>(std::floor(std::log2(std::max<T>(width, height)))) + 1;
+	}
+	void						GenerateMipMaps(VkCommandBuffer commandBuffer, GPUImage& image) const;
+
 private:
 	static VkDebugUtilsMessengerCreateInfoEXT GetDebugMessengerCreateInfo();
 
@@ -100,7 +108,7 @@ private:
 	VkDebugUtilsMessengerEXT	CreateDebugMessenger(VkInstance instance) const;
 	void						DestroyDebugUtils(VkInstance instance, VkDebugUtilsMessengerEXT messenger) const;
 	VkDevice					CreateLogicalDevice(VkPhysicalDevice physicalDevice, const std::vector<OptionalVulkanRequest>& deviceExtensions,
-						                            const VkPhysicalDeviceFeatures& requestedFeatures, VkQueue& graphicsQueue, VkQueue* transferQueue,
+						                            const VkPhysicalDeviceFeatures& requestedFeatures, VkQueue* graphicsQueue, VkQueue* transferQueue,
 						                            uint32_t& graphicsQueueIndex, uint32_t& transferQueueIndex) const;
 	QueueFamilyIndex			FindQueueFamilyIndices(VkPhysicalDevice physicalDevice) const;
 	VkSwapchainKHR				CreateSwapchain(VkPhysicalDevice physicalDevice, VkDevice device, VkSurfaceKHR surface, std::vector<GPUImage>& images);
@@ -130,7 +138,6 @@ private:
 	void						UpdateFragmentDescriptorSets(const GPUBuffer& buffer, VkDescriptorSet* descriptorSet, uint32_t setCount) const;
 	VkSampler					CreateSampler() const;
 	void						SetAttenuationByDistance(size_t lightIndex);
-
 private:
 	static VkBool32 VKAPI_PTR debugUtilsMessenger(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
 								 VkDebugUtilsMessageTypeFlagsEXT messageTypes,
@@ -156,7 +163,7 @@ private:
 	VkSurfaceKHR					m_Surface;
 	uint32_t						m_GraphicsQueueIndex;
 	uint32_t						m_TransferQueueIndex;
-	VkQueue							m_GraphicsQueue;
+	VkQueue							m_GraphicsQueue[2];
 	VkQueue							m_TransferQueue[2];
 	VkSwapchainKHR					m_Swapchain;
 	std::vector<GPUImage>			m_BackBuffers;
@@ -169,7 +176,7 @@ private:
 	GPUImage						m_DepthBuffer;
 	VkDescriptorPool				m_DescriptorPool[2];
 	VkDescriptorSetLayout			m_DescriptorSetLayouts[DESCRIPTOR_SET_TYPE_MAX];
-	VkCommandPool					m_GraphicsCommandPool;
+	VkCommandPool					m_GraphicsCommandPool[2];
 	VkCommandPool					m_TransferCommandPool[2];
 	std::vector<VkCommandBuffer>	m_CommandBuffers;
 	GPUBuffer						m_VertexBuffer;
